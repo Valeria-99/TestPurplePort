@@ -2,10 +2,11 @@
 // @name         PurplePortGreeter TEST
 // @author       herta
 // @namespace    herta
-// @version      0.2.0-test
+// @version      0.2.1-test
 // @description  TEST build: validates PurplePort message automation without automatic sending
 // @match        https://purpleport.com/*
 // @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -157,6 +158,7 @@
     let downloadButton;
     let messageSubjectField;
     let messageBodyField;
+    let diagnosticsButton;
 
     // === CORE VARIABLES ===
     let username;
@@ -222,6 +224,10 @@
                     .join('\n');
                 downloadCsv(HISTORY_FILENAME, historyFileContent);
             }
+        }
+        if (!diagnosticsButton) {
+            diagnosticsButton = createDiagnosticsButton(`${bottom + 40}px`);
+            diagnosticsButton.onclick = runQuickDiagnostics;
         }
         if (restoredProgress) {
             isRunning = false;
@@ -355,6 +361,18 @@
         return downloadButton;
     }
 
+    function createDiagnosticsButton(bottom) {
+        const button = document.createElement('button');
+        button.textContent = '🧪 Quick Test';
+        button.className = 'floating-btn';
+        button.style.bottom = bottom;
+        button.style.right = '10px';
+        button.style.width = '110px';
+        button.title = 'Checks profiles and message form without sending anything';
+        document.body.appendChild(button);
+        return button;
+    }
+
     // === CORE ===
     async function checkAccess() {
         const usernameContainer = await getOne('a[title="See your portfolio"]');
@@ -364,7 +382,8 @@
             accessGranted = false;
             return;
         }
-        username = usernameContainer.href.trim().split("/").at(-1);
+        const usernameUrl = new URL(usernameContainer.href, location.origin);
+        username = usernameUrl.pathname.split('/').filter(Boolean).at(-1);
         logWithTimestamp(`Found the username=${username}`);
         logWithTimestamp('Getting a config ...')
         try {
@@ -617,22 +636,35 @@
     }
 
     function getProfileData(container) {
-        const link = container.querySelector('a[href*="/portfolio/"]');
-        if (!(link instanceof HTMLAnchorElement) || !link.href) return null;
+        if (!(container instanceof Element)) return null;
+
+        const links = [
+            ...container.querySelectorAll('a[href*="/portfolio/"]')
+        ];
+
+        const profileLink = links[0];
+        const nameLink = links.find(
+            link => link.textContent?.trim().length > 0
+        );
+
+        if (!(profileLink instanceof HTMLAnchorElement) || !profileLink.href) {
+            return null;
+        }
 
         try {
-            const url = new URL(link.href, location.origin);
+            const url = new URL(profileLink.href, location.origin);
             url.search = '';
             url.hash = '';
+
             const parts = url.pathname.split('/').filter(Boolean);
             const profileKey = parts.at(-1);
             if (!profileKey) return null;
 
             return {
-                link,
+                link: profileLink,
                 profileKey,
                 profileUrl: `${url.origin}${url.pathname}`,
-                displayName: link.textContent?.trim() || profileKey
+                displayName: nameLink?.textContent?.trim() || profileKey
             };
         } catch (error) {
             warnWithTimestamp(`Invalid profile URL: ${error}`);
@@ -863,13 +895,13 @@
     // === HELPERS ===
     function logWithTimestamp(template, ...args) {
         const timestamp = toLocalTime(new Date());
-        const formattedMessage = formatString(template, args);
+        const formattedMessage = formatString(template, ...args);
         console.log(`[${timestamp}] ${formattedMessage}`);
     }
 
     function warnWithTimestamp(template, ...args) {
         const timestamp = toLocalTime(new Date());
-        const formattedMessage = formatString(template, args);
+        const formattedMessage = formatString(template, ...args);
         console.warn(`[${timestamp}] ${formattedMessage}`);
     }
 
@@ -926,8 +958,280 @@
         return foundElements;
     }
 
+
+    // === QUICK DIAGNOSTICS ===
+    async function runQuickDiagnostics() {
+        const startedAt = performance.now();
+        const report = [];
+        const addResult = (test, passed, details = '') => {
+            report.push({
+                test,
+                status: passed ? '✅ PASS' : '❌ FAIL',
+                details
+            });
+        };
+
+        console.group('🧪 PurplePort Quick Diagnostics');
+        console.info('Nothing will be sent and sent history will not be changed.');
+
+        try {
+            addResult(
+                'Correct site',
+                location.hostname === 'purpleport.com',
+                location.href
+            );
+
+            addResult(
+                'Access granted',
+                accessGranted === true,
+                `accessGranted=${accessGranted}`
+            );
+
+            addResult(
+                'Username detected',
+                Boolean(username),
+                username || 'not found'
+            );
+
+            const onSearchPage =
+                location.href.includes('search/') &&
+                location.href.includes(
+                    `type=${PHOTOGRPAPHER_SEARCH_FILTER_TYPE_VALUE}`
+                );
+
+            addResult(
+                'Photographer search page',
+                onSearchPage,
+                onSearchPage
+                    ? 'Search URL looks valid'
+                    : 'Open a photographer search result page first'
+            );
+
+            const profileBlocks = [
+                ...document.querySelectorAll(
+                    'div.item > div.thumb > div.name'
+                )
+            ];
+
+            addResult(
+                'Profile containers',
+                profileBlocks.length > 0,
+                `found=${profileBlocks.length}`
+            );
+
+            const parsedProfiles = profileBlocks
+                .map(getProfileData)
+                .filter(Boolean);
+
+            addResult(
+                'Profile parser',
+                profileBlocks.length > 0 &&
+                    parsedProfiles.length === profileBlocks.length,
+                `parsed=${parsedProfiles.length}/${profileBlocks.length}`
+            );
+
+            const invalidProfiles = parsedProfiles.filter(profile =>
+                !profile.profileKey ||
+                !profile.profileUrl ||
+                !profile.displayName
+            );
+
+            addResult(
+                'Required profile fields',
+                invalidProfiles.length === 0,
+                `invalid=${invalidProfiles.length}`
+            );
+
+            const keys = parsedProfiles.map(profile => profile.profileKey);
+            const duplicateKeys = [
+                ...new Set(
+                    keys.filter((key, index) =>
+                        keys.indexOf(key) !== index
+                    )
+                )
+            ];
+
+            addResult(
+                'Duplicate profile keys',
+                duplicateKeys.length === 0,
+                duplicateKeys.length
+                    ? duplicateKeys.join(', ')
+                    : 'none'
+            );
+
+            const urlsWithQuery = parsedProfiles.filter(profile =>
+                profile.profileUrl.includes('?') ||
+                profile.profileUrl.includes('#')
+            );
+
+            addResult(
+                'Clean profile URLs',
+                urlsWithQuery.length === 0,
+                `unclean=${urlsWithQuery.length}`
+            );
+
+            const testStorageKey = '__pp_quick_test__';
+            let storagePassed = false;
+
+            try {
+                localStorage.setItem(testStorageKey, 'ok');
+                storagePassed =
+                    localStorage.getItem(testStorageKey) === 'ok';
+                localStorage.removeItem(testStorageKey);
+            } catch (error) {
+                console.warn('localStorage test failed', error);
+            }
+
+            addResult(
+                'localStorage read/write',
+                storagePassed,
+                storagePassed ? 'working' : 'failed'
+            );
+
+            addResult(
+                'Automation mode is safe',
+                TEST_CONFIG.mode !== AUTOMATION_MODE.AUTO_SEND &&
+                    TEST_CONFIG.enableAutomaticSend === false,
+                `mode=${TEST_CONFIG.mode}, automaticSend=${TEST_CONFIG.enableAutomaticSend}`
+            );
+
+            addResult(
+                'SendMessage function',
+                typeof unsafeWindow.SendMessage === 'function',
+                `type=${typeof unsafeWindow.SendMessage}`
+            );
+
+            if (
+                parsedProfiles.length &&
+                typeof unsafeWindow.SendMessage === 'function'
+            ) {
+                const firstProfile = parsedProfiles[0];
+
+                console.info(
+                    'Opening one message form for diagnostics only:',
+                    firstProfile
+                );
+
+                unsafeWindow.SendMessage(
+                    firstProfile.profileKey,
+                    firstProfile.displayName
+                );
+
+                const [
+                    subjectInput,
+                    bodyFrame,
+                    sendButton
+                ] = await Promise.all([
+                    waitForElement('input#subject', 10_000),
+                    waitForElement('iframe#messagecontent_ifr', 10_000),
+                    waitForElement('a#b0', 10_000)
+                ]);
+
+                addResult(
+                    'Subject input',
+                    Boolean(subjectInput),
+                    subjectInput ? 'found' : 'not found'
+                );
+
+                addResult(
+                    'Message iframe',
+                    Boolean(bodyFrame?.contentDocument?.body),
+                    bodyFrame?.contentDocument?.body
+                        ? 'found and accessible'
+                        : 'not found or inaccessible'
+                );
+
+                addResult(
+                    'Send button',
+                    Boolean(sendButton),
+                    sendButton ? 'found' : 'not found'
+                );
+
+                if (subjectInput && bodyFrame?.contentDocument?.body) {
+                    const subject = greetingMessageSubject(
+                        firstProfile.displayName
+                    );
+                    const body = greetingMessageBody(
+                        firstProfile.displayName
+                    );
+
+                    const subjectFilled =
+                        setInputValue(subjectInput, subject);
+                    const bodyFilled =
+                        fillMessageFrame(bodyFrame, body);
+
+                    addResult(
+                        'Subject filling',
+                        subjectFilled,
+                        subjectFilled
+                            ? `length=${subject.length}`
+                            : 'failed'
+                    );
+
+                    addResult(
+                        'Body filling',
+                        bodyFilled,
+                        bodyFilled
+                            ? `length=${body.length}`
+                            : 'failed'
+                    );
+
+                    const unresolvedVariables = [
+                        subject,
+                        body
+                    ].join('\n').match(/\{[^}]+\}/g) || [];
+
+                    addResult(
+                        'Template variables resolved',
+                        unresolvedVariables.length === 0,
+                        unresolvedVariables.length
+                            ? unresolvedVariables.join(', ')
+                            : 'all resolved'
+                    );
+                }
+            } else {
+                addResult(
+                    'Message form diagnostics',
+                    false,
+                    'Skipped because no profile or SendMessage function is unavailable'
+                );
+            }
+        } catch (error) {
+            console.error('Quick diagnostics crashed:', error);
+            addResult(
+                'Unexpected diagnostics error',
+                false,
+                error instanceof Error
+                    ? error.message
+                    : String(error)
+            );
+        }
+
+        const failures = report.filter(
+            item => item.status.includes('FAIL')
+        ).length;
+
+        console.table(report);
+        console.info(
+            `Finished in ${Math.round(performance.now() - startedAt)} ms. ` +
+            `${report.length - failures}/${report.length} checks passed.`
+        );
+        console.info(
+            'The message form may remain open for manual inspection. ' +
+            'The diagnostic did not click Send.'
+        );
+        console.groupEnd();
+
+        return report;
+    }
+
+    // Makes it possible to run the same diagnostics from DevTools:
+    // PPQuickDiagnostics()
+    unsafeWindow.PPQuickDiagnostics = runQuickDiagnostics;
+
     if (location.href.startsWith(SITE_BASE_URL)) {
         checkAccess();
     }
 
 })();
+
