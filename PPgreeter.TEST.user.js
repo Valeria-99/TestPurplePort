@@ -35,7 +35,7 @@
     const LS_PROGRESS_HISTORY_KEY = 'history';
     const LS_BLACKLIST_KEY = 'photographers_blacklist';
     const DEFAULT_CITY = 'your city';
-    const MAX_MESSAGES_PER_DAY = 250;
+    const MAX_MESSAGES_PER_DAY = 1;
     const HISTORY_FILENAME = `history_${getTodayString()}.csv`;
     const DEFAULT_SUBJECT_TEMPLATE = 'Collaboration proposal';
     const LS_SUBJECT_TEMPLATE_KEY = 'photographers_subject_template';
